@@ -100,6 +100,25 @@ TOOL_SCHEMAS = [
             "required": [],
         },
     },
+    {
+        "name": "trustmem_stats",
+        "description": (
+            "Show TrustMem memory scaling metrics for the current session and historical trend. "
+            "Reports prefetch hit rate, quality filter rate, working memory composition, "
+            "and distillation activity. Use to monitor memory system health."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "history": {
+                    "type": "integer",
+                    "description": "Number of past sessions to include in trend analysis (default: 10)",
+                    "default": 10,
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -162,6 +181,10 @@ class TrustMemMemoryProvider:
         self._quality_threshold = float(os.environ.get("TRUSTMEM_QUALITY_THRESHOLD", "0.3"))
         self._quality_llm = os.environ.get("TRUSTMEM_QUALITY_LLM", "").lower() in ("1", "true", "yes")
 
+        # Metrics collector
+        from plugins.memory.trustmem.metrics import MetricsCollector
+        self._metrics = MetricsCollector(session_id=session_id, agent_name=self._agent_name)
+
     # ── System prompt ────────────────────────────────────────────────────────
 
     def system_prompt_block(self) -> str:
@@ -181,15 +204,23 @@ class TrustMemMemoryProvider:
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Return recalled context for this turn (from background thread or sync fallback)."""
+        t0 = time.perf_counter()
+
         with self._prefetch_lock:
             cached = self._prefetch_cache
             self._prefetch_cache = ""  # consume cache
 
         if cached:
+            latency = (time.perf_counter() - t0) * 1000
+            self._metrics.record_prefetch(hit=True, latency_ms=latency)
             return cached
 
-        # First turn: do a synchronous search
-        return self._do_search(query, top=5)
+        # First turn: do a synchronous search (records its own metrics)
+        result = self._do_search(query, top=5)
+        # Update latency on the metric _do_search just recorded
+        if self._metrics._turns:
+            self._metrics._turns[-1].prefetch_latency_ms = (time.perf_counter() - t0) * 1000
+        return result
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """Fire background recall for the next turn."""
@@ -226,6 +257,12 @@ class TrustMemMemoryProvider:
                     assistant_content or "",
                     threshold=self._quality_threshold,
                     llm_fn=self._llm_fn if self._quality_llm else None,
+                )
+
+                self._metrics.record_quality(
+                    score=verdict.score,
+                    outcome=verdict.outcome,
+                    persisted=verdict.should_persist,
                 )
 
                 if not verdict.should_persist:
@@ -282,6 +319,10 @@ class TrustMemMemoryProvider:
             )
         except Exception as exc:
             logger.debug("trustmem on_session_end error: %s", exc)
+
+        # Persist session metrics
+        metrics_dir = Path(self._hermes_home) / "trustmem-metrics"
+        self._metrics.persist(metrics_dir)
 
         # Trigger background distillation if threshold reached
         self._maybe_distill_async()
@@ -383,6 +424,8 @@ class TrustMemMemoryProvider:
             return self._tool_reason(args)
         if tool_name == "trustmem_distill":
             return self._tool_distill(args)
+        if tool_name == "trustmem_stats":
+            return self._tool_stats(args)
         return json.dumps({"error": f"unknown tool: {tool_name}"})
 
     # ── Config schema ─────────────────────────────────────────────────────────
@@ -486,12 +529,32 @@ class TrustMemMemoryProvider:
                         "trustmem: auto-distilled %d knowledge entries from %d episodes",
                         result["distilled"], result["episodes_processed"],
                     )
+                    self._metrics.record_distillation(
+                        knowledge_created=result["distilled"],
+                        episodes_consolidated=result["episodes_processed"],
+                    )
             except Exception as exc:
                 logger.debug("trustmem auto-distill error: %s", exc)
 
         t = threading.Thread(target=_work, daemon=True)
         t.start()
         self._distill_thread = t
+
+    def _tool_stats(self, args: dict[str, Any]) -> str:
+        """Handle the trustmem_stats tool call."""
+        from plugins.memory.trustmem.metrics import load_metrics_history, compute_scaling_trend
+
+        history_limit = int(args.get("history", 10))
+        metrics_dir = Path(self._hermes_home) / "trustmem-metrics"
+
+        current = self._metrics.summarize().to_dict()
+        history = load_metrics_history(metrics_dir, limit=history_limit)
+        trend = compute_scaling_trend(history)
+
+        return json.dumps({
+            "current_session": current,
+            "scaling_trend": trend,
+        }, ensure_ascii=False)
 
     def _tool_distill(self, args: dict[str, Any]) -> str:
         """Handle the trustmem_distill tool call (synchronous)."""
@@ -569,6 +632,19 @@ class TrustMemMemoryProvider:
             knowledge_results=knowledge_results,
             episode_results=episode_results,
         )
+
+        # Record search composition metrics
+        all_confidences = [e.confidence for e in wm.semantic + wm.episodic if e.confidence > 0]
+        self._metrics.record_prefetch(
+            hit=False,  # overwritten by caller if from cache
+            latency_ms=0,
+            knowledge_results=len(knowledge_results) if knowledge_results else 0,
+            episode_results=len(episode_results) if episode_results else 0,
+            semantic_entries=len(wm.semantic),
+            episodic_entries=len(wm.episodic),
+            avg_confidence=sum(all_confidences) / len(all_confidences) if all_confidences else 0,
+        )
+
         return format_working_memory(wm)
 
     def _tool_search(self, args: dict[str, Any]) -> str:
