@@ -112,13 +112,14 @@ class ToolSchemasTest(unittest.TestCase):
         self.tmp.cleanup()
         os.environ.pop("TRUSTMEM_ROOT", None)
 
-    def test_returns_three_tool_schemas(self):
+    def test_returns_four_tool_schemas(self):
         schemas = self.provider.get_tool_schemas()
-        self.assertEqual(len(schemas), 3)
+        self.assertEqual(len(schemas), 4)
         names = {s["name"] for s in schemas}
         self.assertIn("trustmem_search", names)
         self.assertIn("trustmem_reason", names)
         self.assertIn("trustmem_distill", names)
+        self.assertIn("trustmem_stats", names)
 
     def test_search_schema_has_required_query(self):
         schema = next(s for s in self.provider.get_tool_schemas() if s["name"] == "trustmem_search")
