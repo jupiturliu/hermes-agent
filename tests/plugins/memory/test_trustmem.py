@@ -217,10 +217,20 @@ class SyncTurnTest(unittest.TestCase):
     def test_sync_turn_spawns_thread(self):
         mock_el = MagicMock()
         self.provider._el = mock_el
+        self.provider._quality_threshold = 0.0  # accept everything for this test
         self.provider.sync_turn("user message", "assistant response")
         self.assertIsNotNone(self.provider._sync_thread)
         self.provider._sync_thread.join(timeout=3)
         mock_el.log_episode.assert_called_once()
+
+    def test_sync_turn_filters_trivial(self):
+        mock_el = MagicMock()
+        self.provider._el = mock_el
+        self.provider._quality_threshold = 0.3
+        self.provider.sync_turn("ok", "sure")
+        if self.provider._sync_thread:
+            self.provider._sync_thread.join(timeout=3)
+        mock_el.log_episode.assert_not_called()
 
 
 class ShutdownTest(unittest.TestCase):
