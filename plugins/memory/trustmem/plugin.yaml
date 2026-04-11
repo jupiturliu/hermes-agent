@@ -1,0 +1,10 @@
+name: trustmem
+version: 0.1.0
+description: "TrustMem — trust-weighted episodic + knowledge memory with four-tier visibility, temporal decay, and multi-agent verification."
+hooks:
+  - prefetch
+  - sync_turn
+  - on_session_end
+  - on_pre_compress
+  - on_delegation
+  - on_memory_write
