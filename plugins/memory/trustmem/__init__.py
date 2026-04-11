@@ -158,6 +158,10 @@ class TrustMemMemoryProvider:
         self._distill_threshold = int(os.environ.get("TRUSTMEM_DISTILL_THRESHOLD", "10"))
         self._llm_fn = kwargs.get("llm_fn")  # optional LLM callable from agent
 
+        # Quality judge
+        self._quality_threshold = float(os.environ.get("TRUSTMEM_QUALITY_THRESHOLD", "0.3"))
+        self._quality_llm = os.environ.get("TRUSTMEM_QUALITY_LLM", "").lower() in ("1", "true", "yes")
+
     # ── System prompt ────────────────────────────────────────────────────────
 
     def system_prompt_block(self) -> str:
@@ -205,7 +209,7 @@ class TrustMemMemoryProvider:
     # ── Sync turn ────────────────────────────────────────────────────────────
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        """Non-blocking: log the turn as an episode in a background thread."""
+        """Non-blocking: score quality then log the turn if it passes threshold."""
         if self._readonly or not user_content.strip():
             return
 
@@ -215,14 +219,30 @@ class TrustMemMemoryProvider:
             try:
                 if self._el is None:
                     return
+                from plugins.memory.trustmem.quality_judge import judge_episode
+
+                verdict = judge_episode(
+                    user_content,
+                    assistant_content or "",
+                    threshold=self._quality_threshold,
+                    llm_fn=self._llm_fn if self._quality_llm else None,
+                )
+
+                if not verdict.should_persist:
+                    logger.debug(
+                        "trustmem: skipping low-quality turn (score=%.2f, outcome=%s)",
+                        verdict.score, verdict.outcome,
+                    )
+                    return
+
                 self._el.log_episode(
                     agent=self._agent_name,
                     task_type="conversation",
                     task=user_content[:500],
                     approach="hermes-session",
-                    outcome="success",
+                    outcome=verdict.outcome,
                     duration_s=0,
-                    quality=0.7,
+                    quality=verdict.score,
                     notes=assistant_content[:500] if assistant_content else "",
                 )
             except Exception as exc:
@@ -296,20 +316,27 @@ class TrustMemMemoryProvider:
     # ── Delegation ───────────────────────────────────────────────────────────
 
     def on_delegation(self, task: str, result: str, *, child_session_id: str = "", **kwargs) -> None:
-        """Log a subagent completion as an episode on the parent agent."""
+        """Score and log a subagent completion as an episode."""
         if self._readonly or self._el is None:
             return
 
         def _work():
             try:
+                from plugins.memory.trustmem.quality_judge import judge_episode
+
+                verdict = judge_episode(task, result or "", threshold=self._quality_threshold)
+                if not verdict.should_persist:
+                    logger.debug("trustmem: skipping low-quality delegation (score=%.2f)", verdict.score)
+                    return
+
                 self._el.log_episode(
                     agent=self._agent_name,
                     task_type="delegation",
                     task=task[:500],
                     approach=f"delegated to {child_session_id or 'subagent'}",
-                    outcome="success",
+                    outcome=verdict.outcome,
                     duration_s=0,
-                    quality=0.75,
+                    quality=verdict.score,
                     notes=result[:500] if result else "",
                 )
             except Exception as exc:
@@ -320,20 +347,24 @@ class TrustMemMemoryProvider:
     # ── Memory write mirror ───────────────────────────────────────────────────
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror built-in MEMORY.md writes into TrustMem episodes."""
+        """Mirror built-in MEMORY.md writes into TrustMem episodes with quality scoring."""
         if self._readonly or self._el is None:
             return
 
         def _work():
             try:
+                from plugins.memory.trustmem.quality_judge import score_heuristic
+
+                # Memory writes are intentional — score for metadata but always persist
+                verdict = score_heuristic(f"memory {action}: {target}", content)
                 self._el.log_episode(
                     agent=self._agent_name,
                     task_type="memory-write",
                     task=f"memory {action}: {content[:300]}",
                     approach=f"builtin-{target}",
-                    outcome="success",
+                    outcome=verdict.outcome,
                     duration_s=0,
-                    quality=0.8,
+                    quality=max(0.6, verdict.score),  # floor at 0.6 — writes are always valuable
                 )
             except Exception as exc:
                 logger.debug("trustmem on_memory_write error: %s", exc)
@@ -392,6 +423,13 @@ class TrustMemMemoryProvider:
                 "required": False,
                 "default": "10",
                 "env_var": "TRUSTMEM_DISTILL_THRESHOLD",
+            },
+            {
+                "key": "trustmem_quality_threshold",
+                "description": "Min quality score to persist an episode (0.0-1.0, default: 0.3)",
+                "required": False,
+                "default": "0.3",
+                "env_var": "TRUSTMEM_QUALITY_THRESHOLD",
             },
         ]
 
