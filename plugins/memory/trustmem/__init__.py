@@ -532,31 +532,44 @@ class TrustMemMemoryProvider:
             logger.warning("trustmem: could not import Python tools: %s", exc)
 
     def _do_search(self, query: str, top: int = 5) -> str:
-        """Run knowledge search and format results as markdown context."""
-        if self._ks is None:
-            return ""
-        try:
-            results = self._ks.search(
-                query,
-                top_k=top,
-                caller=self._agent_name,
-                viewer=self._agent_name,
-                scope="all",
-            )
-        except Exception as exc:
-            logger.debug("trustmem search error: %s", exc)
-            return ""
+        """Assemble structured working memory from knowledge + episodic layers."""
+        from plugins.memory.trustmem.working_memory import (
+            assemble_working_memory,
+            format_working_memory,
+        )
 
-        if not results:
-            return ""
+        # Layer 1: Knowledge search (semantic + some episodic)
+        knowledge_results = None
+        if self._ks is not None:
+            try:
+                knowledge_results = self._ks.search(
+                    query,
+                    top_k=top + 2,  # fetch extra for classification split
+                    caller=self._agent_name,
+                    viewer=self._agent_name,
+                    scope="all",
+                )
+            except Exception as exc:
+                logger.debug("trustmem knowledge search error: %s", exc)
 
-        lines = ["## TrustMem Context"]
-        for r in results[:top]:
-            title = r.get("title") or r.get("file", "untitled")
-            score = r.get("effective_confidence") or r.get("score", 0)
-            snippet = (r.get("snippet") or r.get("body", ""))[:300]
-            lines.append(f"**{title}** (confidence: {score:.2f})\n{snippet}")
-        return "\n\n".join(lines)
+        # Layer 2: Episode recall (always episodic)
+        episode_results = None
+        if self._el is not None:
+            try:
+                episode_results = self._el.recall_similar(
+                    query,
+                    agent=self._agent_name,
+                    top_k=top,
+                )
+            except Exception as exc:
+                logger.debug("trustmem episode recall error: %s", exc)
+
+        wm = assemble_working_memory(
+            query=query,
+            knowledge_results=knowledge_results,
+            episode_results=episode_results,
+        )
+        return format_working_memory(wm)
 
     def _tool_search(self, args: dict[str, Any]) -> str:
         query = args.get("query", "")
@@ -574,7 +587,7 @@ class TrustMemMemoryProvider:
                 viewer=self._agent_name,
                 scope="all",
             )
-            return json.dumps({"results": results, "query": query, "layer": layer}, ensure_ascii=False)
+            return json.dumps({"results": results[:top], "query": query, "layer": layer}, ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"error": str(exc)})
 
