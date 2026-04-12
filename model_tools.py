@@ -130,7 +130,6 @@ def _run_async(coro):
 # =============================================================================
 
 discover_builtin_tools()
-
 # MCP tool discovery (external MCP servers from config)
 try:
     from tools.mcp_tool import discover_mcp_tools

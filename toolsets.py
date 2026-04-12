@@ -186,6 +186,11 @@ TOOLSETS = {
         "includes": []
     },
     
+    "synapse": {
+        "description": "AI Factory Agent Fabric — dispatch tasks via Synapse Event Bus",
+        "tools": ["synapse_dispatch", "synapse_blackboard"],
+        "includes": []
+    },
     "delegation": {
         "description": "Spawn subagents with isolated context for complex subtasks",
         "tools": ["delegate_task"],
