@@ -248,7 +248,11 @@ def write_knowledge_file(
     agent: str = "hermes",
     domain: str = DEFAULT_KNOWLEDGE_DOMAIN,
 ) -> Path:
-    """Write a distilled knowledge entry as a markdown file with frontmatter."""
+    """Write a distilled knowledge entry as a markdown file with frontmatter.
+
+    Uses knowledge_utils.write_frontmatter when available (proper YAML formatting),
+    falls back to manual writing if TrustMem tools are not importable.
+    """
     domain_dir = knowledge_root / domain
     domain_dir.mkdir(parents=True, exist_ok=True)
 
@@ -266,27 +270,36 @@ def write_knowledge_file(
         counter += 1
 
     now_str = datetime.now().strftime("%Y-%m-%d")
-    meta_lines = [
-        "---",
-        f'title: "{title}"',
-        f"author: {agent}",
-        f"created: {now_str}",
-        f"updated: {now_str}",
-        f"confidence: {confidence:.2f}",
-        f"verification_status: auto_distilled",
-        f"data_freshness: {now_str}",
-        f"decay_class: normal",
-        f"sources_count: {len(source_episode_ids)}",
-        f"domain: {domain}",
-        f"tags: {json.dumps(tags, ensure_ascii=False)}",
-        f"distilled_from: {json.dumps(source_episode_ids[:10], ensure_ascii=False)}",
-        f"distillation_date: {now_str}",
-        "---",
-        "",
-        body.rstrip(),
-        "",
-    ]
-    filepath.write_text("\n".join(meta_lines), encoding="utf-8")
+    meta = {
+        "title": title,
+        "author": agent,
+        "created": now_str,
+        "updated": now_str,
+        "confidence": round(confidence, 2),
+        "verification_status": "auto_distilled",
+        "data_freshness": now_str,
+        "decay_class": "normal",
+        "sources_count": len(source_episode_ids),
+        "domain": domain,
+        "tags": tags,
+        "distilled_from": source_episode_ids[:10],
+        "distillation_date": now_str,
+    }
+
+    try:
+        import knowledge_utils
+        knowledge_utils.write_frontmatter(filepath, meta, body)
+    except ImportError:
+        # Fallback: manual frontmatter writing
+        lines = ["---"]
+        for key, value in meta.items():
+            if isinstance(value, (list, dict)):
+                lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
+            else:
+                lines.append(f"{key}: {value}")
+        lines.extend(["---", "", body.rstrip(), ""])
+        filepath.write_text("\n".join(lines), encoding="utf-8")
+
     return filepath
 
 
@@ -384,6 +397,12 @@ class EpisodicDistiller:
 
                 episode_ids = [ep["id"] for ep in cluster if ep.get("id")]
 
+                # Check for overlap with existing knowledge before writing
+                if self._has_similar_knowledge(parsed["title"], parsed.get("tags", [])):
+                    logger.debug("distiller: skipping duplicate knowledge: %s", parsed["title"])
+                    all_consolidated_ids.extend(episode_ids)
+                    continue
+
                 filepath = write_knowledge_file(
                     knowledge_root=self.knowledge_root,
                     title=parsed["title"],
@@ -413,6 +432,27 @@ class EpisodicDistiller:
 
         result["episodes_processed"] = len(all_consolidated_ids)
         return result
+
+    def _has_similar_knowledge(self, title: str, tags: list[str]) -> bool:
+        """Check if similar knowledge already exists using knowledge_consolidate."""
+        try:
+            import knowledge_consolidate
+            groups = knowledge_consolidate.find_overlapping_groups(threshold=0.6)
+            # Check if any existing group title overlaps with our new title
+            title_lower = title.lower()
+            for group in groups:
+                for file_info in group.get("files", []):
+                    existing_title = str(file_info.get("title", "")).lower()
+                    # Simple overlap check: >50% word overlap
+                    title_words = set(re.findall(r'[a-z]{3,}|[\u4e00-\u9fff]{2,}', title_lower))
+                    existing_words = set(re.findall(r'[a-z]{3,}|[\u4e00-\u9fff]{2,}', existing_title))
+                    if title_words and existing_words:
+                        overlap = len(title_words & existing_words) / len(title_words | existing_words)
+                        if overlap > 0.5:
+                            return True
+        except (ImportError, Exception) as exc:
+            logger.debug("distiller: overlap check unavailable: %s", exc)
+        return False
 
     def _call_llm(self, prompt: str) -> str:
         """Call LLM for distillation. Falls back to extractive summary."""

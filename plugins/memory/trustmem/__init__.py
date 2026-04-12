@@ -101,6 +101,31 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "trustmem_promote",
+        "description": (
+            "Promote high-quality episodic memories directly to the knowledge base. "
+            "Episodes with high quality scores are written as knowledge files without "
+            "waiting for batch distillation. Use when a specific episode contains a "
+            "valuable standalone insight."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "threshold": {
+                    "type": "number",
+                    "description": "Min quality score for promotion (default: 0.8)",
+                    "default": 0.8,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max episodes to promote (default: 5)",
+                    "default": 5,
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "trustmem_stats",
         "description": (
             "Show TrustMem memory scaling metrics for the current session and historical trend. "
@@ -324,8 +349,9 @@ class TrustMemMemoryProvider:
         metrics_dir = Path(self._hermes_home) / "trustmem-metrics"
         self._metrics.persist(metrics_dir)
 
-        # Trigger background distillation if threshold reached
+        # Trigger background distillation and promotion if threshold reached
         self._maybe_distill_async()
+        self._maybe_promote_async()
 
     # ── Pre-compress ─────────────────────────────────────────────────────────
 
@@ -357,7 +383,7 @@ class TrustMemMemoryProvider:
     # ── Delegation ───────────────────────────────────────────────────────────
 
     def on_delegation(self, task: str, result: str, *, child_session_id: str = "", **kwargs) -> None:
-        """Score and log a subagent completion as an episode."""
+        """Score and log a subagent completion with structured agent_hooks metadata."""
         if self._readonly or self._el is None:
             return
 
@@ -370,15 +396,33 @@ class TrustMemMemoryProvider:
                     logger.debug("trustmem: skipping low-quality delegation (score=%.2f)", verdict.score)
                     return
 
+                # Use agent_hooks for richer metadata if available
+                used_memory = False
+                memory_ids: list[str] = []
+                try:
+                    import agent_hooks
+                    pre = agent_hooks.before_task(
+                        agent=self._agent_name,
+                        task=task[:500],
+                        scope="domain",
+                        top=3,
+                    )
+                    used_memory = bool(pre.get("memory_ids"))
+                    memory_ids = pre.get("memory_ids", [])
+                except (ImportError, Exception):
+                    pass
+
                 self._el.log_episode(
                     agent=self._agent_name,
                     task_type="delegation",
                     task=task[:500],
                     approach=f"delegated to {child_session_id or 'subagent'}",
                     outcome=verdict.outcome,
-                    duration_s=0,
+                    duration_s=int(kwargs.get("duration_s", 0)),
                     quality=verdict.score,
                     notes=result[:500] if result else "",
+                    used_memory=used_memory,
+                    memory_ids=memory_ids,
                 )
             except Exception as exc:
                 logger.debug("trustmem on_delegation error: %s", exc)
@@ -424,6 +468,8 @@ class TrustMemMemoryProvider:
             return self._tool_reason(args)
         if tool_name == "trustmem_distill":
             return self._tool_distill(args)
+        if tool_name == "trustmem_promote":
+            return self._tool_promote(args)
         if tool_name == "trustmem_stats":
             return self._tool_stats(args)
         return json.dumps({"error": f"unknown tool: {tool_name}"})
@@ -540,8 +586,49 @@ class TrustMemMemoryProvider:
         t.start()
         self._distill_thread = t
 
+    # ── Episode promotion ──────────────────────────────────────────────────
+
+    def _maybe_promote_async(self) -> None:
+        """Background auto-promotion of high-quality episodes."""
+        def _work():
+            try:
+                import memory_promote
+                result = memory_promote.auto_promote(
+                    threshold=0.8,
+                    limit=3,
+                    domain="distilled",
+                    visibility="domain",
+                )
+                promoted_count = len(result.get("promoted", []))
+                if promoted_count > 0:
+                    logger.info("trustmem: auto-promoted %d episodes to knowledge", promoted_count)
+            except ImportError:
+                pass  # memory_promote not available
+            except Exception as exc:
+                logger.debug("trustmem auto-promote error: %s", exc)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _tool_promote(self, args: dict[str, Any]) -> str:
+        """Handle the trustmem_promote tool call."""
+        threshold = float(args.get("threshold", 0.8))
+        limit = int(args.get("limit", 5))
+        try:
+            import memory_promote
+            result = memory_promote.auto_promote(
+                threshold=threshold,
+                limit=limit,
+                domain="distilled",
+                visibility="domain",
+            )
+            return json.dumps(result, ensure_ascii=False, default=str)
+        except ImportError:
+            return json.dumps({"error": "memory_promote not available (TrustMem tools not in path)"})
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
     def _tool_stats(self, args: dict[str, Any]) -> str:
-        """Handle the trustmem_stats tool call."""
+        """Handle the trustmem_stats tool call with enriched episode and decay data."""
         from plugins.memory.trustmem.metrics import load_metrics_history, compute_scaling_trend
 
         history_limit = int(args.get("history", 10))
@@ -551,10 +638,33 @@ class TrustMemMemoryProvider:
         history = load_metrics_history(metrics_dir, limit=history_limit)
         trend = compute_scaling_trend(history)
 
-        return json.dumps({
+        result: dict[str, Any] = {
             "current_session": current,
             "scaling_trend": trend,
-        }, ensure_ascii=False)
+        }
+
+        # Enrich with episode statistics from episode_logger.get_stats()
+        try:
+            if self._el is not None:
+                episode_stats = self._el.get_stats(agent=self._agent_name)
+                result["episode_stats"] = episode_stats
+        except Exception as exc:
+            logger.debug("trustmem stats: episode_stats error: %s", exc)
+
+        # Enrich with stale knowledge detection from knowledge_decay_scan
+        try:
+            import knowledge_decay_scan
+            stale = knowledge_decay_scan.scan()
+            result["stale_knowledge"] = {
+                "total_stale": len(stale),
+                "critical": sum(1 for s in stale if s.get("severity") == "critical"),
+                "warning": sum(1 for s in stale if s.get("severity") == "warning"),
+                "top_stale": stale[:5],  # top 5 most decayed
+            }
+        except (ImportError, Exception) as exc:
+            logger.debug("trustmem stats: decay_scan error: %s", exc)
+
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     def _tool_distill(self, args: dict[str, Any]) -> str:
         """Handle the trustmem_distill tool call (synchronous)."""
