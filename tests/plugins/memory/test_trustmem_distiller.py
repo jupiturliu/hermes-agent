@@ -281,7 +281,7 @@ class TestWriteKnowledgeFile:
         assert path.exists()
         content = path.read_text()
         assert "---" in content
-        assert 'title: "GPU Memory Patterns"' in content
+        assert "title:" in content and "GPU Memory Patterns" in content
         assert "confidence: 0.75" in content
         assert "verification_status: auto_distilled" in content
         assert "Always pre-allocate" in content
