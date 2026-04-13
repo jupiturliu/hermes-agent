@@ -203,7 +203,7 @@ class TrustMemMemoryProvider:
         self._llm_fn = kwargs.get("llm_fn")  # optional LLM callable from agent
 
         # Quality judge
-        self._quality_threshold = float(os.environ.get("TRUSTMEM_QUALITY_THRESHOLD", "0.3"))
+        self._quality_threshold = float(os.environ.get("TRUSTMEM_QUALITY_THRESHOLD", "0.1"))
         self._quality_llm = os.environ.get("TRUSTMEM_QUALITY_LLM", "").lower() in ("1", "true", "yes")
 
         # Metrics collector
