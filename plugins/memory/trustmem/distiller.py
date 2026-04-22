@@ -28,7 +28,7 @@ import re
 import sqlite3
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +52,7 @@ def fetch_raw_episodes(
     """Fetch unconsolidated episodes from SQLite, ordered by recency."""
     try:
         conn = sqlite3.connect(db_path, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.row_factory = sqlite3.Row
         query = (
             "SELECT id, agent_id, created_at, summary, details, importance, "
@@ -259,7 +260,7 @@ def write_knowledge_file(
     # Generate filename from title
     slug = re.sub(r'[^\w\s-]', '', title.lower())
     slug = re.sub(r'[\s]+', '-', slug).strip('-')[:60]
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     filename = f"{slug}-{date_str}.md"
     filepath = domain_dir / filename
 
@@ -269,7 +270,7 @@ def write_knowledge_file(
         filepath = domain_dir / f"{slug}-{date_str}-{counter}.md"
         counter += 1
 
-    now_str = datetime.now().strftime("%Y-%m-%d")
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     meta = {
         "title": title,
         "author": agent,

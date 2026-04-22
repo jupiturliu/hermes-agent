@@ -210,6 +210,11 @@ class TrustMemMemoryProvider:
         from plugins.memory.trustmem.metrics import MetricsCollector
         self._metrics = MetricsCollector(session_id=session_id, agent_name=self._agent_name)
 
+        # Session-level prefetch: pre-warm cache using agent_name as query
+        # so Turn 1 gets an immediate cache hit instead of a 200-500ms sync search
+        if not self._readonly and self._ks is not None:
+            self.queue_prefetch(self._agent_name, session_id=session_id)
+
     # ── System prompt ────────────────────────────────────────────────────────
 
     def system_prompt_block(self) -> str:
@@ -312,15 +317,21 @@ class TrustMemMemoryProvider:
 
         t = threading.Thread(target=_work, daemon=True)
         t.start()
-        self._sync_thread = t
+        # P0: Track ALL sync threads to join at session end (not just last)
+        if not hasattr(self, '_sync_threads'):
+            self._sync_threads = []
+        self._sync_threads.append(t)
+        self._sync_thread = t  # compat: keep last ref
 
     # ── Session end ──────────────────────────────────────────────────────────
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:
         """Wait for pending writes, then log a session summary episode and trigger distillation."""
-        # Flush pending sync
-        if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=8)
+        # Flush ALL pending sync threads (not just last one)
+        for t in getattr(self, '_sync_threads', []):
+            if t and t.is_alive():
+                t.join(timeout=4)
+        self._sync_threads = []
 
         if self._readonly or not messages or self._el is None:
             return
@@ -536,9 +547,14 @@ class TrustMemMemoryProvider:
 
     def shutdown(self) -> None:
         """Flush pending threads on clean exit."""
-        for t in (self._sync_thread, self._prefetch_thread, self._distill_thread):
-            if t and t.is_alive():
-                t.join(timeout=5)
+        for attr in ('_sync_threads', '_sync_thread', '_prefetch_thread', '_distill_thread'):
+            val = getattr(self, attr, None)
+            if val is None:
+                continue
+            threads = val if isinstance(val, list) else [val]
+            for t in threads:
+                if t and t.is_alive():
+                    t.join(timeout=3)
 
     # ── Distillation ─────────────────────────────────────────────────────────
 
@@ -552,7 +568,7 @@ class TrustMemMemoryProvider:
                 return None
 
             self._distiller = EpisodicDistiller(
-                db_path=self.db_path if hasattr(self, 'db_path') else self._db_path,
+                db_path=self._db_path,
                 knowledge_root=knowledge_root,
                 agent_name=self._agent_name,
                 threshold=self._distill_threshold,
@@ -766,12 +782,18 @@ class TrustMemMemoryProvider:
             return json.dumps({"error": "knowledge_search not available"})
 
         try:
+            # Honor the layer parameter (knowledge / episodes / all)
+            search_scope = "all"
+            if layer == "knowledge":
+                search_scope = "knowledge"
+            elif layer == "episodes":
+                search_scope = "episodes"
             results = self._ks.search(
                 query,
                 top_k=top,
                 caller=self._agent_name,
                 viewer=self._agent_name,
-                scope="all",
+                scope=search_scope,
             )
             return json.dumps({"results": results[:top], "query": query, "layer": layer}, ensure_ascii=False)
         except Exception as exc:

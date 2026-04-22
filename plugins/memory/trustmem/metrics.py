@@ -260,14 +260,22 @@ class MetricsCollector:
 
 
 def load_metrics_history(metrics_dir: Path, limit: int = 20) -> list[dict[str, Any]]:
-    """Load recent session metrics from the JSONL log."""
+    """Load recent session metrics from the JSONL log (streaming, bounded memory)."""
     log_path = metrics_dir / "memory_metrics.jsonl"
     if not log_path.exists():
         return []
     try:
-        lines = log_path.read_text(encoding="utf-8").strip().split("\n")
-        entries = [json.loads(line) for line in lines if line.strip()]
-        return entries[-limit:]
+        from collections import deque
+        entries: deque = deque(maxlen=limit)
+        with open(log_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        return list(entries)
     except Exception as exc:
         logger.debug("metrics load error: %s", exc)
         return []
