@@ -683,14 +683,38 @@ class TrustMemMemoryProvider:
         return json.dumps(result, ensure_ascii=False, default=str)
 
     def _tool_distill(self, args: dict[str, Any]) -> str:
-        """Handle the trustmem_distill tool call (synchronous)."""
+        """Handle the trustmem_distill tool call.
+
+        Runs distillation in a background thread by default so agent tasks
+        are not blocked.  Pass ``sync: true`` to wait for the result.
+        """
         force = args.get("force", False)
+        sync = args.get("sync", False)
         try:
             distiller = self._get_distiller()
             if distiller is None:
                 return json.dumps({"error": "distiller not available (knowledge root not found)"})
-            result = distiller.run(force=force)
-            return json.dumps(result, ensure_ascii=False)
+
+            if sync:
+                result = distiller.run(force=force)
+                return json.dumps(result, ensure_ascii=False)
+
+            # Async (default): fire-and-forget in background thread
+            def _work():
+                try:
+                    res = distiller.run(force=force)
+                    if res["distilled"] > 0:
+                        logger.info(
+                            "trustmem: distilled %d knowledge entries from %d episodes (background)",
+                            res["distilled"], res["episodes_processed"],
+                        )
+                except Exception as exc:
+                    logger.debug("trustmem background distill error: %s", exc)
+
+            t = threading.Thread(target=_work, daemon=True)
+            t.start()
+            self._distill_thread = t
+            return json.dumps({"status": "scheduled", "message": "distillation running in background"})
         except Exception as exc:
             return json.dumps({"error": str(exc)})
 

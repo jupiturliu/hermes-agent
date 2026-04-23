@@ -536,9 +536,13 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
 
     script_timeout = _get_script_timeout()
 
+    # Prefer hermes venv python for consistent dependency environment.
+    _venv_python = Path(__file__).resolve().parent.parent / "venv" / "bin" / "python3"
+    python_exe = str(_venv_python) if _venv_python.exists() else sys.executable
+
     try:
         result = subprocess.run(
-            [sys.executable, str(path)],
+            [python_exe, str(path)],
             capture_output=True,
             text=True,
             timeout=script_timeout,
