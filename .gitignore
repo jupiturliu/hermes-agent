@@ -69,3 +69,6 @@ mini-swe-agent/
 result
 website/static/api/skills-index.json
 dump.rdb
+# Copyrighted financial reports (not for public GitHub)
+research/
+*.pdf
