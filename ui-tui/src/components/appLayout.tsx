@@ -22,6 +22,7 @@ import { GoodVibesHeart, StatusRule, StickyPromptTracker, TranscriptScrollbar } 
 import { FloatingOverlays, PromptZone } from './appOverlays.js'
 import { Banner, Panel, SessionPanel } from './branding.js'
 import { FpsOverlay } from './fpsOverlay.js'
+import { HelpHint } from './helpHint.js'
 import { MessageLine } from './messageLine.js'
 import { QueuedMessages } from './queuedMessages.js'
 import { LiveTodoPanel, StreamingAssistant } from './streamingAssistant.js'
@@ -242,6 +243,8 @@ const ComposerPane = memo(function ComposerPane({
           pagerPageSize={composer.pagerPageSize}
         />
 
+        {composer.input === '?' && !composer.inputBuf.length && <HelpHint t={ui.theme} />}
+
         {!isBlocked && (
           <>
             {composer.inputBuf.map((line, i) => (
@@ -263,6 +266,7 @@ const ComposerPane = memo(function ComposerPane({
               onMouseDrag={dragFromPromptRow}
               onMouseUp={endInputDrag}
               position="relative"
+              width={Math.max(1, composer.cols - 2)}
             >
               <Box width={promptWidth}>
                 {sh ? (
@@ -274,7 +278,7 @@ const ComposerPane = memo(function ComposerPane({
                 )}
               </Box>
 
-              <Box flexGrow={0} flexShrink={0} height={inputHeight} position="relative" width={inputColumns}>
+              <Box flexGrow={0} flexShrink={0} height={inputHeight} width={inputColumns}>
                 {/* Reserve the transcript scrollbar gutter too so typing never rewraps when the scrollbar column repaints. */}
                 <TextInput
                   columns={inputColumns}
@@ -285,10 +289,10 @@ const ComposerPane = memo(function ComposerPane({
                   placeholder={composer.empty ? PLACEHOLDER : ui.busy ? 'Ctrl+C to interrupt…' : ''}
                   value={composer.input}
                 />
+              </Box>
 
-                <Box position="absolute" right={0}>
-                  <GoodVibesHeart t={ui.theme} tick={status.goodVibesTick} />
-                </Box>
+              <Box position="absolute" right={0}>
+                <GoodVibesHeart t={ui.theme} tick={status.goodVibesTick} />
               </Box>
             </Box>
           </>
