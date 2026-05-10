@@ -105,6 +105,11 @@ const config: Config = {
           position: 'left',
         },
         {
+          to: '/careers/summer-interns-2026',
+          label: 'Careers',
+          position: 'left',
+        },
+        {
           href: 'https://hermes-agent.nousresearch.com',
           label: 'Home',
           position: 'right',

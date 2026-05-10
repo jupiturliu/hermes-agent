@@ -5,6 +5,14 @@ const sidebars: SidebarsConfig = {
     'user-stories',
     {
       type: 'category',
+      label: 'Careers',
+      collapsed: false,
+      items: [
+        'careers/summer-interns-2026',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Getting Started',
       collapsed: true,
       items: [
