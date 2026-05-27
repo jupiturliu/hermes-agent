@@ -402,6 +402,12 @@ class ChatCompletionsTransport(ProviderTransport):
         overrides = params.get("request_overrides")
         if overrides:
             api_kwargs.update(overrides)
+            if "tools" in api_kwargs:
+                normalized_tools = self.convert_tools(api_kwargs.get("tools") or [])
+                if normalized_tools:
+                    api_kwargs["tools"] = normalized_tools
+                else:
+                    api_kwargs.pop("tools", None)
 
         return api_kwargs
 
@@ -516,6 +522,12 @@ class ChatCompletionsTransport(ProviderTransport):
                     extra_body.update(v)
                 else:
                     api_kwargs[k] = v
+            if "tools" in api_kwargs:
+                normalized_tools = self.convert_tools(api_kwargs.get("tools") or [])
+                if normalized_tools:
+                    api_kwargs["tools"] = normalized_tools
+                else:
+                    api_kwargs.pop("tools", None)
 
         if extra_body:
             api_kwargs["extra_body"] = extra_body

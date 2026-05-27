@@ -145,6 +145,11 @@ class ResponsesApiTransport(ProviderTransport):
         request_overrides = params.get("request_overrides")
         if request_overrides:
             kwargs.update(request_overrides)
+            from agent.codex_responses_adapter import _normalize_responses_tools
+
+            normalized_override_tools = _normalize_responses_tools(kwargs.get("tools"))
+            if normalized_override_tools is not None:
+                kwargs["tools"] = normalized_override_tools
 
         if is_codex_backend:
             prompt_cache_key = kwargs.get("prompt_cache_key")

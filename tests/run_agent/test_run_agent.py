@@ -5179,6 +5179,52 @@ class TestToolDescriptionNormalization:
 
         assert kwargs["tools"][0]["function"]["description"] == ""
 
+    def test_chat_completions_request_overrides_cannot_reintroduce_none_tool_description(self):
+        from agent.transports.chat_completions import ChatCompletionsTransport
+
+        kwargs = ChatCompletionsTransport().build_kwargs(
+            "openai/gpt-oss-120b:free",
+            [{"role": "user", "content": "hi"}],
+            tools=None,
+            request_overrides={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "list_all_recent_tickets",
+                            "description": None,
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert kwargs["tools"][0]["function"]["description"] == ""
+
+    def test_codex_request_overrides_cannot_reintroduce_none_tool_description(self):
+        from agent.transports.codex import ResponsesApiTransport
+
+        kwargs = ResponsesApiTransport().build_kwargs(
+            "gpt-5.5",
+            [{"role": "user", "content": "hi"}],
+            tools=None,
+            request_overrides={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "list_all_recent_tickets",
+                            "description": None,
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert kwargs["tools"][0]["description"] == ""
+
 
 # ---------------------------------------------------------------------------
 # OAuth flag and nudge counter fixes (salvaged from PR #1797)

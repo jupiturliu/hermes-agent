@@ -228,6 +228,32 @@ def _responses_tools(tools: Optional[List[Dict[str, Any]]] = None) -> Optional[L
     return converted or None
 
 
+def _normalize_responses_tools(tools: Any) -> Optional[List[Dict[str, Any]]]:
+    """Normalize Responses-format tools after all request overrides are merged."""
+    if not isinstance(tools, list):
+        return None
+
+    normalized: List[Dict[str, Any]] = []
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "function" and "function" in item:
+            converted = _responses_tools([item])
+            if converted:
+                normalized.extend(converted)
+            continue
+        copied = dict(item)
+        if copied.get("type") == "function":
+            description = copied.get("description", "")
+            if description is None:
+                description = ""
+            elif not isinstance(description, str):
+                description = str(description)
+            copied["description"] = description
+        normalized.append(copied)
+    return normalized or None
+
+
 # ---------------------------------------------------------------------------
 # Message format conversion
 # ---------------------------------------------------------------------------
