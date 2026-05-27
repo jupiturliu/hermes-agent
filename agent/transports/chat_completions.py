@@ -154,8 +154,22 @@ class ChatCompletionsTransport(ProviderTransport):
         return sanitized
 
     def convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Tools are already in OpenAI format — identity."""
-        return tools
+        """Return OpenAI-format tools with provider-safe string descriptions."""
+        normalized = []
+        for tool in tools or []:
+            if not isinstance(tool, dict):
+                continue
+            copied = copy.deepcopy(tool)
+            fn = copied.get("function")
+            if isinstance(fn, dict):
+                description = fn.get("description", "")
+                if description is None:
+                    description = ""
+                elif not isinstance(description, str):
+                    description = str(description)
+                fn["description"] = description
+            normalized.append(copied)
+        return normalized
 
     def build_kwargs(
         self,
@@ -244,6 +258,7 @@ class ChatCompletionsTransport(ProviderTransport):
 
         # Tools
         if tools:
+            tools = self.convert_tools(tools)
             # Moonshot/Kimi uses a stricter flavored JSON Schema.  Rewriting
             # tool parameters here keeps aggregator routes (Nous, OpenRouter,
             # etc.) compatible, in addition to direct moonshot.ai endpoints.
@@ -435,6 +450,7 @@ class ChatCompletionsTransport(ProviderTransport):
 
         # Tools — apply Moonshot/Kimi schema sanitization regardless of path
         if tools:
+            tools = self.convert_tools(tools)
             if is_moonshot_model(model):
                 tools = sanitize_moonshot_tools(tools)
             api_kwargs["tools"] = tools

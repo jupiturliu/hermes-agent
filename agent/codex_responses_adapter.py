@@ -213,10 +213,15 @@ def _responses_tools(tools: Optional[List[Dict[str, Any]]] = None) -> Optional[L
         name = fn.get("name")
         if not isinstance(name, str) or not name.strip():
             continue
+        description = fn.get("description", "")
+        if description is None:
+            description = ""
+        elif not isinstance(description, str):
+            description = str(description)
         converted.append({
             "type": "function",
             "name": name,
-            "description": fn.get("description", ""),
+            "description": description,
             "strict": False,
             "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
         })

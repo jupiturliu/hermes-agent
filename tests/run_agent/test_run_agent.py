@@ -5142,6 +5142,44 @@ class TestNormalizeCodexDictArguments:
         assert tc.function.arguments == args_str
 
 
+class TestToolDescriptionNormalization:
+    def test_codex_responses_tools_coerce_none_description_to_empty_string(self):
+        from agent.codex_responses_adapter import _responses_tools
+
+        converted = _responses_tools([
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_all_recent_tickets",
+                    "description": None,
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ])
+
+        assert converted[0]["description"] == ""
+
+    def test_chat_completions_kwargs_coerce_none_tool_description_to_empty_string(self):
+        from agent.transports.chat_completions import ChatCompletionsTransport
+
+        kwargs = ChatCompletionsTransport().build_kwargs(
+            "openai/gpt-oss-120b:free",
+            [{"role": "user", "content": "hi"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_all_recent_tickets",
+                        "description": None,
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        )
+
+        assert kwargs["tools"][0]["function"]["description"] == ""
+
+
 # ---------------------------------------------------------------------------
 # OAuth flag and nudge counter fixes (salvaged from PR #1797)
 # ---------------------------------------------------------------------------
