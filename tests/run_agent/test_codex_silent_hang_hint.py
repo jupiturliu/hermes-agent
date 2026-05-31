@@ -61,12 +61,17 @@ def test_hint_fires_for_gpt_5_5_codex_suffix(tmp_path):
     assert hint is not None
 
 
-def test_hint_fires_when_model_arg_omitted(tmp_path):
-    """The helper falls back to ``self.model`` when ``model=`` not passed."""
+def test_gpt_5_5_on_codex_is_redirected_so_self_model_hint_is_moot(tmp_path):
+    """gpt-5.5 on the Codex backend is now redirected to gpt-5.4-codex at init
+    (``_avoid_silently_rejected_codex_model``), a stronger fix than the advisory
+    hint. So an agent never *persists* gpt-5.5 as ``self.model`` on codex: the
+    no-arg hint (which falls back to ``self.model``) correctly returns None
+    because the redirect already removed the silent-reject risk. The hint still
+    fires for an explicit ``model="gpt-5.5"`` arg (covered above)."""
     agent = _make_agent(tmp_path)
     agent.api_mode = "codex_responses"
-    hint = agent._codex_silent_hang_hint()
-    assert hint is not None
+    assert agent.model == "gpt-5.4-codex"  # redirected at init
+    assert agent._codex_silent_hang_hint() is None  # nothing left to warn about
 
 
 # ── negative cases: hint stays None ────────────────────────────────────────

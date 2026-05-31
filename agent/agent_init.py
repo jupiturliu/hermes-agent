@@ -136,6 +136,44 @@ def _merge_custom_provider_extra_body(agent, custom_providers: List[Dict[str, An
     agent.request_overrides = overrides
 
 
+def _avoid_silently_rejected_codex_model(agent) -> None:
+    """Redirect the gpt-5.5 family to a stable codex model on the ChatGPT Codex
+    backend.
+
+    chatgpt.com/backend-api/codex chronically returns a terminal
+    response.output=None for the gpt-5.5 family (no usable stream finalize),
+    which the OpenAI SDK surfaces as ``TypeError: 'NoneType' object is not
+    iterable``. The runtime only survives via stream-event backfill / fallback,
+    so every primary call degrades and logs an error. gpt-5.4-codex does not
+    exhibit the failure on the same OAuth profile, so we redirect once at init
+    instead of degrading every request. See hermes-agent #21444 and the
+    ``_codex_silent_hang_hint`` heuristic that shares this detection.
+    """
+    is_codex_backend = agent.api_mode == "codex_responses" and (
+        agent.provider == "openai-codex"
+        or (
+            getattr(agent, "_base_url_hostname", "") == "chatgpt.com"
+            and "/backend-api/codex" in (getattr(agent, "_base_url_lower", "") or "")
+        )
+    )
+    if not is_codex_backend:
+        return
+    model_lower = (agent.model or "").lower()
+    # Match the gpt-5.5 family — bare ``gpt-5.5``, ``gpt-5.5-codex``, vendor
+    # prefixes like ``openai/gpt-5.5``, and future ``gpt-5.5-*`` SKUs; anchor at
+    # a word boundary so unrelated tokens like ``gpt-5.50`` do not match.
+    if not re.search(r"(?:^|[/\-_])gpt-5\.5(?:$|[\-_])", model_lower):
+        return
+    redirected = "gpt-5.4-codex"
+    logging.getLogger("run_agent").info(
+        "Redirecting %r to %r on the Codex backend (gpt-5.5 hits a chronic "
+        "response.output=None on chatgpt.com/backend-api/codex).",
+        agent.model,
+        redirected,
+    )
+    agent.model = redirected
+
+
 def init_agent(
     agent,
     base_url: str = None,
@@ -339,6 +377,7 @@ def init_agent(
             agent.model = normalize_model_for_provider(agent.model, agent.provider)
     except Exception:
         pass
+    _avoid_silently_rejected_codex_model(agent)
 
     # GPT-5.x models usually require the Responses API path, but some
     # providers have exceptions (for example Copilot's gpt-5-mini still
