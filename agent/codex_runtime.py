@@ -297,6 +297,20 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                             len(collected_output_items),
                             len(agent._codex_streamed_text_parts),
                         )
+                    else:
+                        # Truly-empty Codex stream (no items, no deltas).
+                        # Force output=[] so downstream SDK iteration sees an
+                        # empty list instead of None — caller treats this as
+                        # "model said nothing", recoverable next tick, rather
+                        # than crashing with TypeError ('NoneType' not iterable)
+                        # which the conversation_loop misclassifies as a local
+                        # programming bug and aborts non-retryably.
+                        final_response.output = []
+                        logger.debug(
+                            "Codex stream: empty stream + no backfill content; "
+                            "forcing output=[] to prevent SDK TypeError. %s",
+                            agent._client_log_context(),
+                        )
                 return final_response
         except (_httpx.RemoteProtocolError, _httpx.ReadTimeout, _httpx.ConnectError, ConnectionError) as exc:
             if attempt < max_stream_retries:
@@ -482,6 +496,15 @@ def run_codex_create_stream_fallback(agent, api_kwargs: dict, client: Any = None
                             "(items=%d, text_parts=%d)",
                             len(collected_output_items),
                             len(collected_text_deltas),
+                        )
+                    else:
+                        # Truly-empty Codex fallback stream — force output=[]
+                        # to keep downstream SDK iteration safe. See sibling
+                        # comment in run_codex_stream.
+                        terminal_response.output = []
+                        logger.debug(
+                            "Codex fallback stream: empty stream + no backfill content; "
+                            "forcing output=[] to prevent SDK TypeError."
                         )
                 return terminal_response
     finally:

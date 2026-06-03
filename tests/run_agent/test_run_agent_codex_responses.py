@@ -539,6 +539,49 @@ def test_run_codex_stream_falls_back_when_stream_iteration_parses_null_output(mo
     assert response.status == "completed"
 
 
+def test_run_codex_stream_forces_empty_output_when_truly_empty(monkeypatch):
+    """ChatGPT Codex backend can complete with output=None and zero
+    output_items / text_deltas. The recovery layer's backfill returns
+    None in that case; without a final guard the SDK / downstream code
+    would then iterate ``response.output`` (None) and raise TypeError
+    ('NoneType' is not iterable), which conversation_loop misclassifies
+    as a local programming bug and aborts non-retryably (the failure
+    mode that paused the learning-loop-observe cron after 228 runs).
+
+    The guard forces ``response.output = []`` so the caller sees
+    "model said nothing" — recoverable next tick — instead of crashing.
+    """
+    agent = _build_agent(monkeypatch)
+    final_response = SimpleNamespace(
+        output=None,
+        status="completed",
+        model="gpt-5-codex",
+    )
+    calls = {"stream": 0, "create": 0}
+
+    def _fake_stream(**kwargs):
+        calls["stream"] += 1
+        return _FakeResponsesStream(final_response=final_response)
+
+    def _unexpected_create(**kwargs):  # pragma: no cover - guard fires before fallback
+        calls["create"] += 1
+        raise AssertionError("create() fallback should not run when guard handles empty stream")
+
+    agent.client = SimpleNamespace(
+        responses=SimpleNamespace(stream=_fake_stream, create=_unexpected_create),
+    )
+
+    response = agent._run_codex_stream(_codex_request_kwargs())
+
+    assert calls["stream"] == 1
+    assert calls["create"] == 0
+    assert response.output == [], (
+        "guard should rewrite output=None -> [] so SDK iteration is safe; "
+        f"got {response.output!r}"
+    )
+    assert response.status == "completed"
+
+
 def test_run_conversation_codex_plain_text(monkeypatch):
     agent = _build_agent(monkeypatch)
     monkeypatch.setattr(agent, "_interruptible_api_call", lambda api_kwargs: _codex_message_response("OK"))
