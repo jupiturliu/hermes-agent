@@ -600,6 +600,41 @@ class TestSessionJsonSnapshotOptIn:
         assert hasattr(agent, "logs_dir")
 
 
+class TestRequestDumpCapturesTraceback:
+    """dump_api_request_debug must persist the full traceback of the error.
+
+    Regression: a systemic codex-cron ``TypeError: 'NoneType' object is not
+    iterable`` went undiagnosed for days because the request dump stored only
+    the error ``type``/``message`` and dropped the traceback, leaving no way
+    to pinpoint the failing frame.
+    """
+
+    def test_dump_includes_error_traceback(self, agent, tmp_path):
+        from agent.agent_runtime_helpers import dump_api_request_debug
+
+        agent.logs_dir = tmp_path
+        try:
+            for _ in None:  # raises TypeError: 'NoneType' object is not iterable
+                pass
+        except TypeError as exc:
+            err = exc
+
+        dump_file = dump_api_request_debug(
+            agent, {"model": "gpt-5.4-mini", "messages": []},
+            reason="non_retryable_client_error", error=err,
+        )
+
+        assert dump_file is not None and dump_file.exists()
+        payload = json.loads(dump_file.read_text(encoding="utf-8"))
+        tb = payload.get("error", {}).get("traceback")
+        assert isinstance(tb, list) and tb, "dump must include a non-empty traceback list"
+        joined = "".join(tb)
+        assert "TypeError" in joined and "not iterable" in joined
+        assert "test_dump_includes_error_traceback" in joined, (
+            "traceback should name the raising frame"
+        )
+
+
 class TestSaveSessionLogRedactsSecrets:
     """Regression: session_*.json must not contain plaintext credentials (#19798, #19845)."""
 

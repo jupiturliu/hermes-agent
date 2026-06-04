@@ -29,6 +29,7 @@ import os
 import re
 import threading
 import time
+import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -1089,6 +1090,20 @@ def dump_api_request_debug(
                 "type": type(error).__name__,
                 "message": str(error),
             }
+            # Capture the full traceback so local programming-bug errors
+            # (e.g. ``TypeError: 'NoneType' object is not iterable`` raised
+            # inside response normalization) are debuggable from the dump
+            # alone.  Without this only ``type``/``message`` survive, which
+            # is useless for pinpointing the failing frame — the exact gap
+            # that masked the systemic codex-cron null-output bug for days.
+            tb = getattr(error, "__traceback__", None)
+            if tb is not None:
+                try:
+                    error_info["traceback"] = traceback.format_exception(
+                        type(error), error, tb
+                    )
+                except Exception:  # pragma: no cover — defensive
+                    pass
             for attr_name in ("status_code", "request_id", "code", "param", "type"):
                 attr_value = getattr(error, attr_name, None)
                 if attr_value is not None:
